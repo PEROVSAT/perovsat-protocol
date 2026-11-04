@@ -11,17 +11,21 @@ filesystem, or driver dependency.
 - `flight/imu/`, `flight/sweep/`, and `flight/payload_reading/` contain the
   corresponding value types and codecs.
 - `examples/` contains small C and C++ consumer examples.
-- `simulation/` is reserved for future simulation support; no simulation codec
-  is implemented in this pass.
+- `simulation/` contains the V3 bench frame shared by the controller, bridge,
+  and emulated devices. `simulation/version.h` is the frame version.
+  `simulation/frame/frame.h` is the root of the type tree, and the directories
+  under it follow Command, Sample, and Log.
 
 The CMake targets are `perovsat_protocol_core`, `perovsat_protocol_flight`,
-and the aggregate `perovsat_protocol` interface target. The root include path
-lets consumers write, for example, `#include "core/writer.h"` or
-`#include "flight/payload_reading/payload_reading.h"`.
+`perovsat_protocol_simulation`, and the aggregate `perovsat_protocol` interface
+target. The root include path lets consumers write, for example,
+`#include "core/writer.h"`, `#include "flight/payload_reading/payload_reading.h"`,
+or `#include "simulation/frame/frame.h"`.
 
 The former header-only C++ prototype API has been replaced by compiled C
 libraries. Consumers should link `perovsat_protocol_core` for the codec core,
-or `perovsat_protocol_flight` / `perovsat_protocol` for the flight codecs.
+`perovsat_protocol_flight` for the flight codecs, `perovsat_protocol_simulation`
+for bench frames, or `perovsat_protocol` for both.
 
 ## API and codec contract
 
@@ -107,6 +111,41 @@ for the configured `NUM_AMUS`, and assign each active sweep its stable payload
 index. This keeps the codec independent of Zephyr and AMU implementation
 details.
 
-This pass implements the PayloadReading body codec only. It does not define a
-Message or WirePacket abstraction, an envelope, packet versioning, transport
-fragmentation, or simulation behavior.
+The flight codec does not define transport framing, packet versioning, or
+fragmentation.
+
+## Simulation link
+
+`simulation/frame/frame.h` is one record on the bench link. Its `version` must
+equal `PSP_SIMULATION_VERSION` or the codec rejects the frame. The transport
+delivers every frame to every participant. Destination works like an I2C
+address: `PSP_ADDRESS_ALL` (0) is the general call, and any other value is a
+participant address. `psp_address_accepted` is true for the general call or for
+the receiver's own address. The codec still decodes frames the local address
+would ignore.
+
+`time_sent` and `time_received` are nanoseconds since the Unix epoch on the
+sender's and receiver's UTC estimates. The sender writes `time_sent` and writes
+`time_received` as 0. The receiving endpoint may record `time_received` in its
+own copy after a successful decode. A bridge forwards the encoded bytes and
+does not write either field. A device's estimate is its free-running counter
+until the bridge corrects it, and a rough UTC after that.
+
+The V3 prefix is 20 bytes: version, destination, source, transmit UTC, receive
+UTC, then frame kind. Source is the configured participant address; general
+call remains destination zero. The full maximum frame is 87 bytes.
+
+Command, Sample, and Log are variants. Each type exposes
+`*_MAX_SERIALIZED_SIZE` for buffer capacity. That constant is not the length of
+every value; `psp_writer_position` is the encoded length. Commands begin with
+kind and request ID. UtcSync (kind 1) carries correction and rate; its request
+ID is echoed by UtcReport. GetStatus (kind 2) has no arm and returns a status
+log plus a result log. Result log kind 3 reports request ID, command kind, and
+APPLIED/REJECTED/UNSUPPORTED/BUSY. Status log kind 4 reports sample/clock
+flags and counters. I2C transaction log kind 2 carries transaction ID,
+explicit start UTC, monotonic offsets, defined evidence flags, variable
+captures (up to 16 bytes each), served sample sequence, and total byte counts.
+`simulation/golden-vectors-v3.txt` contains shared little-endian fixtures for
+sample, sync, report, transaction, status, and result bodies. The bridge sends
+UtcSync and reads UtcReport to keep each device's estimate tracking the host
+clock. The exchange is documented in the hitl-bridge repository.
