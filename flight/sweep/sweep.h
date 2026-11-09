@@ -15,7 +15,7 @@ extern "C" {
 
 /* Driver-provided sweep values, serialized in this field order. crc is carried
  * as source metadata and is not computed or treated as a protocol checksum. */
-typedef struct {
+typedef struct __attribute__((packed)) {
     float voc;
     float isc;
     float tsensor_start;
